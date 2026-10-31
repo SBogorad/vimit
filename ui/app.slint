@@ -704,7 +704,7 @@ export component AppWindow inherits Window {
             }
 
             if (root.is-android) : Rectangle {
-                min-height: root.api-key-configured ? 112px : 146px;
+                min-height: root.api-key-configured ? 148px : 182px;
                 background: Theme.bg-card;
                 border-radius: 10px;
                 border-color: Theme.border;
@@ -744,6 +744,13 @@ export component AppWindow inherits Window {
 
                     if (!root.api-key-configured) : Text {
                         text: "Ключ хранится только в локальном файле приложения Android и не выводится в лог.";
+                        color: Theme.text-muted;
+                        font-size: 11px;
+                        wrap: word-wrap;
+                    }
+
+                    Text {
+                        text: "Android 13+ попросит разрешение на системные уведомления. Без него предупреждения останутся в приложении, а vibration fallback продолжит работать.";
                         color: Theme.text-muted;
                         font-size: 11px;
                         wrap: word-wrap;

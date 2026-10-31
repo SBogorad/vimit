@@ -36,6 +36,20 @@ CARGO_APK_RELEASE_KEYSTORE_PASSWORD=... \
 cargo apk build --release --features android-gui --target aarch64-linux-android --lib
 ```
 
+## Notification permission
+
+The Android manifest already declares `android.permission.POST_NOTIFICATIONS`.
+On Android 13+ the Slint Activity must also request that permission at runtime
+before system notifications can appear.
+
+Current Android behavior:
+
+- request `POST_NOTIFICATIONS` only on Android 13+;
+- skip the prompt when the permission is already granted;
+- keep the app usable when the permission is denied;
+- explain in the UI that in-app warning state and vibration fallback can remain
+  visible even when system notifications stay hidden.
+
 ## Proposed architecture
 
 - Reuse existing quota parsing, API failover, thresholds, and creature state

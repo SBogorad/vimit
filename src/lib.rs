@@ -54,10 +54,19 @@ pub const USER_AGENT_GUI: &str = concat!("vimit-gui/", env!("CARGO_PKG_VERSION")
 pub const DEFAULT_WARNING_THRESHOLD: f64 = 75.0;
 pub const DEFAULT_DANGER_THRESHOLD: f64 = 90.0;
 pub const DEFAULT_ABTOP_BIN: &str = "abtop";
+#[cfg(all(target_os = "android", feature = "android-gui"))]
+const ANDROID_NOTIFICATION_PERMISSION: &str = "android.permission.POST_NOTIFICATIONS";
+#[cfg(all(target_os = "android", feature = "android-gui"))]
+const ANDROID_NOTIFICATION_PERMISSION_GRANTED: i32 = 0;
+#[cfg(all(target_os = "android", feature = "android-gui"))]
+const ANDROID_NOTIFICATION_PERMISSION_REQUEST_CODE: i32 = 113;
+#[cfg(all(target_os = "android", feature = "android-gui"))]
+const ANDROID_NOTIFICATION_RUNTIME_SDK: i32 = 33;
 
 #[cfg(all(target_os = "android", feature = "android-gui"))]
 #[unsafe(no_mangle)]
 pub fn android_main(app: slint::android::AndroidApp) {
+    let permission_app = app.clone();
     let data_dir = app.internal_data_path();
     slint::android::init(app).expect("cannot initialize Android backend");
     let window = AppWindow::new().expect("cannot initialize Slint window");
@@ -105,6 +114,7 @@ pub fn android_main(app: slint::android::AndroidApp) {
         android_start_refresh(weak.clone(), key_for_demo.clone(), true);
     });
 
+    let _ = android_request_notification_permission_if_needed(&permission_app);
     android_start_refresh(window.as_weak(), key_state, false);
     window.run().expect("cannot run Slint window");
 }
@@ -132,6 +142,100 @@ fn android_save_api_key(path: &std::path::Path, key: &str) -> Result<(), String>
             .map_err(|error| format!("cannot create Android config dir: {error}"))?;
     }
     fs::write(path, key).map_err(|error| format!("cannot save Android API key: {error}"))
+}
+
+#[cfg(all(target_os = "android", feature = "android-gui"))]
+fn android_needs_notification_runtime_permission(sdk: i32) -> bool {
+    sdk >= ANDROID_NOTIFICATION_RUNTIME_SDK
+}
+
+#[cfg(all(target_os = "android", feature = "android-gui"))]
+fn android_should_request_notification_permission(sdk: i32, granted: bool) -> bool {
+    android_needs_notification_runtime_permission(sdk) && !granted
+}
+
+#[cfg(all(target_os = "android", feature = "android-gui"))]
+fn android_request_notification_permission_if_needed(
+    app: &slint::android::AndroidApp,
+) -> Result<(), String> {
+    let app = app.clone();
+    android_run_on_java_main_thread(&app, move |env, activity| {
+        let sdk = android_sdk_int(env)?;
+        let granted = android_notification_permission_granted(env, activity)?;
+        if !android_should_request_notification_permission(sdk, granted) {
+            return Ok(());
+        }
+
+        let string_class = env.find_class(jni::jni_str!("java/lang/String"))?;
+        let permissions = env.new_object_array(1, string_class, jni::objects::JObject::null())?;
+        let permission = env.new_string(ANDROID_NOTIFICATION_PERMISSION)?;
+        let permission = jni::objects::JObject::from(permission);
+        env.set_object_array_element(&permissions, 0, &permission)?;
+        env.call_method(
+            activity,
+            jni::jni_str!("requestPermissions"),
+            jni::jni_sig!("([Ljava/lang/String;I)V"),
+            &[
+                jni::objects::JValue::Object(&permissions),
+                jni::objects::JValue::Int(ANDROID_NOTIFICATION_PERMISSION_REQUEST_CODE),
+            ],
+        )?;
+        Ok(())
+    })
+}
+
+#[cfg(all(target_os = "android", feature = "android-gui"))]
+fn android_notification_permission_granted(
+    env: &mut jni::Env,
+    activity: &jni::objects::JObject,
+) -> jni::errors::Result<bool> {
+    if !android_needs_notification_runtime_permission(android_sdk_int(env)?) {
+        return Ok(true);
+    }
+
+    let permission = env.new_string(ANDROID_NOTIFICATION_PERMISSION)?;
+    let permission = jni::objects::JObject::from(permission);
+    let result = env
+        .call_method(
+            activity,
+            jni::jni_str!("checkSelfPermission"),
+            jni::jni_sig!("(Ljava/lang/String;)I"),
+            &[jni::objects::JValue::Object(&permission)],
+        )?
+        .i()?;
+    Ok(result == ANDROID_NOTIFICATION_PERMISSION_GRANTED)
+}
+
+#[cfg(all(target_os = "android", feature = "android-gui"))]
+fn android_sdk_int(env: &mut jni::Env) -> jni::errors::Result<i32> {
+    let version = env.find_class(jni::jni_str!("android/os/Build$VERSION"))?;
+    env.get_static_field(version, jni::jni_str!("SDK_INT"), jni::jni_sig!("I"))?
+        .i()
+}
+
+#[cfg(all(target_os = "android", feature = "android-gui"))]
+fn android_run_on_java_main_thread<F>(
+    app: &slint::android::AndroidApp,
+    callback: F,
+) -> Result<(), String>
+where
+    F: FnOnce(&mut jni::Env, &jni::objects::JObject) -> jni::errors::Result<()> + Send + 'static,
+{
+    if app.vm_as_ptr().is_null() || app.activity_as_ptr().is_null() {
+        return Err("Android activity is not available".to_string());
+    }
+
+    let app = app.clone();
+    app.clone().run_on_java_main_thread(Box::new(move || {
+        let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr() as _) };
+        let _ = vm.attach_current_thread(|env| {
+            let activity = unsafe {
+                jni::objects::JObject::from_raw(env, app.activity_as_ptr() as jni::sys::jobject)
+            };
+            callback(env, &activity)
+        });
+    }));
+    Ok(())
 }
 
 #[cfg(all(target_os = "android", feature = "android-gui"))]
