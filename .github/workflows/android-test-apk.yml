@@ -32,7 +32,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev
 
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v3.2.2
+        with:
+          packages: 'platform-tools'
 
       - name: Install Android SDK packages
         run: |
@@ -97,7 +99,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev
 
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v3.2.2
+        with:
+          packages: 'platform-tools'
 
       - name: Install Android SDK packages
         run: |
