@@ -240,23 +240,27 @@ pub fn android_main(app: slint::android::AndroidApp) {
     let key_for_save = key_state.clone();
     let weak = window.as_weak();
     window.on_save_api_key(move |value| {
-        if let Some(window) = weak.upgrade() {
-            let key = value.trim().to_string();
-            if key.is_empty() {
-                window.set_error_text("API key пустой".into());
-                return;
-            }
-            match android_save_api_key(&path_for_save, &key) {
-                Ok(()) => {
-                    *key_for_save.lock().unwrap() = key;
-                    window.set_api_key_input("".into());
-                    window.set_api_key_configured(true);
-                    window.set_error_text("".into());
-                    window.set_status_text("Ключ сохранён. Нажмите Проверить.".into());
-                }
-                Err(error) => window.set_error_text(error.into()),
-            }
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let key = value.trim().to_string();
+        if key.is_empty() {
+            window.set_error_text("API key пустой".into());
+            return;
         }
+        // Keep the UI thread free: the file write runs on a worker thread, the
+        // same way `android_start_refresh` does, and only the resulting state is
+        // applied back through the event loop.
+        let weak = window.as_weak();
+        let path = path_for_save.clone();
+        let key_state = key_for_save.clone();
+        std::thread::spawn(move || {
+            let result = android_save_api_key(&path, &key);
+            let state = android_api_key_save_state(&key, result);
+            let _ = weak.upgrade_in_event_loop(move |window| {
+                android_apply_api_key_save(&window, &key_state, &key, state);
+            });
+        });
     });
 
     let key_for_refresh = key_state.clone();
@@ -339,6 +343,50 @@ fn android_save_api_key(path: &std::path::Path, key: &str) -> Result<(), String>
             .map_err(|error| format!("cannot create Android config dir: {error}"))?;
     }
     fs::write(path, key).map_err(|error| format!("cannot save Android API key: {error}"))
+}
+
+/// Outcome of saving the API key, kept separate from the file write so the
+/// decision is testable without an Android window or a real filesystem.
+#[cfg(any(test, all(target_os = "android", feature = "android-gui")))]
+#[derive(Debug, Clone, PartialEq)]
+enum AndroidApiKeySaveState {
+    Rejected,
+    Saved,
+    Error(String),
+}
+
+#[cfg(any(test, all(target_os = "android", feature = "android-gui")))]
+fn android_api_key_save_state(
+    raw_key: &str,
+    save_result: Result<(), String>,
+) -> AndroidApiKeySaveState {
+    if raw_key.trim().is_empty() {
+        return AndroidApiKeySaveState::Rejected;
+    }
+    match save_result {
+        Ok(()) => AndroidApiKeySaveState::Saved,
+        Err(error) => AndroidApiKeySaveState::Error(error),
+    }
+}
+
+#[cfg(all(target_os = "android", feature = "android-gui"))]
+fn android_apply_api_key_save(
+    window: &AppWindow,
+    key_state: &Arc<Mutex<String>>,
+    key: &str,
+    state: AndroidApiKeySaveState,
+) {
+    match state {
+        AndroidApiKeySaveState::Rejected => window.set_error_text("API key пустой".into()),
+        AndroidApiKeySaveState::Saved => {
+            *key_state.lock().unwrap() = key.to_string();
+            window.set_api_key_input("".into());
+            window.set_api_key_configured(true);
+            window.set_error_text("".into());
+            window.set_status_text("Ключ сохранён. Нажмите Проверить.".into());
+        }
+        AndroidApiKeySaveState::Error(error) => window.set_error_text(error.into()),
+    }
 }
 
 #[cfg(all(target_os = "android", feature = "android-gui"))]
@@ -1094,6 +1142,30 @@ mod tests {
             "sessions_total": 1,
             "sessions_active": sessions_active
         }))
+    }
+
+    #[test]
+    fn android_api_key_save_rejects_blank_key() {
+        assert_eq!(
+            android_api_key_save_state("   ", Ok(())),
+            AndroidApiKeySaveState::Rejected
+        );
+    }
+
+    #[test]
+    fn android_api_key_save_reports_success() {
+        assert_eq!(
+            android_api_key_save_state("vm-live-key", Ok(())),
+            AndroidApiKeySaveState::Saved
+        );
+    }
+
+    #[test]
+    fn android_api_key_save_surfaces_io_error() {
+        assert_eq!(
+            android_api_key_save_state("vm-live-key", Err("disk full".into())),
+            AndroidApiKeySaveState::Error("disk full".into())
+        );
     }
 
     #[test]
