@@ -9,5 +9,6 @@ build/
 target/
 .env
 vimit.json
-
 .cursor/
+.codex/
+.agents/
